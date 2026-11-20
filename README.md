@@ -83,8 +83,8 @@ Aside from that, we have updated the code to work with the most recent, stable v
 
 ## Semantic Segmentation Requirements
 
-- Hardware: one CUDA-enabled GPU for inference
-- Software: Python 3.11 through 3.14 and a CUDA-compatible PyTorch installation
+- Hardware: a CUDA-enabled GPU for the default inference mode, or a CPU with `--device cpu`
+- Software: Python 3.11 through 3.14 and PyTorch for the selected device
 
 ## Installation
 
@@ -174,7 +174,7 @@ uv run python -m tile2net generate \
 ```
 
 The command writes the city-information JSON path after `INFO Dumping to`. Run
-local CUDA inference from that metadata with:
+local inference from that metadata with:
 
 ```bash
 uv run python -m tile2net inference \
@@ -183,6 +183,10 @@ uv run python -m tile2net inference \
   --eval test \
   --dump_percent 0
 ```
+
+On a Mac or another system without CUDA, add `--device cpu` to the inference
+command. CPU inference uses the same checkpoints and produces the same output
+formats. Processing large areas can take longer on a CPU.
 
 The complete pipeline can be connected with a shell pipe; `--city_info` is not
 needed because `inference` reads the JSON emitted by `generate`:

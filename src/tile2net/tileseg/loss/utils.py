@@ -39,7 +39,7 @@ from tile2net.tileseg.loss.rmi import RMILoss
 from tile2net.namespace import Namespace
 
 
-def get_loss(args: Namespace):
+def get_loss(args: Namespace, *, device='cuda'):
     """
     Get the criterion based on the loss function
     args: commandline arguments
@@ -49,24 +49,24 @@ def get_loss(args: Namespace):
     if cfg.MODEL.RMI_LOSS:
         criterion = RMILoss(
             num_classes=cfg.DATASET.NUM_CLASSES,
-            ignore_index=cfg.DATASET.IGNORE_LABEL).cuda()
+            ignore_index=cfg.DATASET.IGNORE_LABEL)
     elif cfg.MODEL.IMG_WT_LOSS:
         criterion = ImageBasedCrossEntropyLoss2d(
             classes=cfg.DATASET.NUM_CLASSES,
             ignore_index=cfg.DATASET.IGNORE_LABEL,
-            upper_bound=args.wt_bound, fp16=args.train.fp16).cuda()
+            upper_bound=args.wt_bound, fp16=args.train.fp16)
     elif cfg.MODEL.JOINTBORDER:
         criterion = ImgWtLossSoftNLL(
             classes=cfg.DATASET.NUM_CLASSES,
             ignore_index=cfg.DATASET.IGNORE_LABEL,
-            upper_bound=args.wt_bound).cuda()
+            upper_bound=args.wt_bound)
     else:
         criterion = CrossEntropyLoss2d(
-            ignore_index=cfg.DATASET.IGNORE_LABEL).cuda()
+            ignore_index=cfg.DATASET.IGNORE_LABEL)
 
     criterion_val = CrossEntropyLoss2d(
-        weight=None, ignore_index=cfg.DATASET.IGNORE_LABEL).cuda()
-    return criterion, criterion_val
+        weight=None, ignore_index=cfg.DATASET.IGNORE_LABEL)
+    return criterion.to(device), criterion_val.to(device)
 
 
 class ImageBasedCrossEntropyLoss2d(nn.Module):

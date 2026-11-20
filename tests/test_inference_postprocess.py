@@ -22,9 +22,46 @@ from tile2net.tileseg.inference.inference import (
     build_pedestrian_network,
     read_segmentation_png,
 )
+from tile2net.tileseg.loss.optimizer import restore_net
 from tile2net.tileseg.utils.misc import ThreadedDumper
+from tile2net.tileseg.utils.trnval_utils import eval_minibatch
 
 LOCATION = [40.7490, -74.0000, 40.7500, -73.9990]
+
+
+def test_cpu_minibatch_uses_data_parallel_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.classifier = torch.nn.Conv2d(3, 2, 1, bias=False)
+
+        def forward(self, inputs):
+            return {"pred": self.classifier(inputs["images"])}
+
+    def unexpected_cuda_call():
+        pytest.fail("CPU inference called torch.cuda.empty_cache")
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", unexpected_cuda_call)
+    monkeypatch.setitem(cfg.DATASET, "NUM_CLASSES", 2)
+    monkeypatch.setitem(cfg.MODEL, "MSCALE", True)
+    model = Model().eval()
+    weights = torch.zeros_like(model.classifier.weight)
+    weights[1].fill_(1)
+    restore_net(model, {"state_dict": {"module.classifier.weight": weights}})
+    torch.testing.assert_close(model.classifier.weight, weights)
+
+    data = (
+        torch.ones((1, 3, 4, 4)),
+        torch.ones((1, 4, 4), dtype=torch.long),
+        ["tile_0"],
+        None,
+    )
+    args = SimpleNamespace(default_scale=1.0, multi_scale_inference=False, do_flip=False)
+    assets, _ = eval_minibatch(data, model, None, None, False, args, 0)
+
+    np.testing.assert_array_equal(assets["predictions"], np.ones((1, 4, 4)))
 
 
 @pytest.mark.parametrize(

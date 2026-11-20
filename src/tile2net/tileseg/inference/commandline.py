@@ -28,6 +28,10 @@ commandline = compose_left(
         '--result_dir', type=str,
     ),
     arg(
+        '--device', choices=('cuda', 'cpu'), default='cuda',
+        help='Device for inference. Use cpu on systems without CUDA.',
+    ),
+    arg(
         '--vector-format',
         '--vector_format',
         dest='vector_format',

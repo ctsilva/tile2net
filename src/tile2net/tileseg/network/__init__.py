@@ -10,7 +10,7 @@ from tile2net.tileseg.config import cfg
 from tile2net.logger import logger
 
 
-def get_net(args, criterion):
+def get_net(args, criterion, *, device='cuda'):
     """
     Get Network Architecture based on arguments provided
     """
@@ -21,8 +21,7 @@ def get_net(args, criterion):
     # logger.debug('Model params = {:2.1f}M'.format(num_params / 1000000))
     logger.info('Model params = {:2.1f}M'.format(num_params / 1000000))
 
-    net = net.cuda()
-    return net
+    return net.to(device)
 
 
 def is_gscnn_arch(args):

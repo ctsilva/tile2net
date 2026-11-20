@@ -87,7 +87,9 @@ def eval_minibatch(data, net, criterion, val_loss, calc_metrics, args, val_idx):
          handled within the model itself (see networks/mscale.py -> nscale_forward())
       2. 'multi_scale_inference', where we use Averaging to combine scales
     """
-    torch.cuda.empty_cache()
+    device = next(net.parameters()).device
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
 
     scales = [args.default_scale]
     if args.multi_scale_inference:
@@ -98,6 +100,7 @@ def eval_minibatch(data, net, criterion, val_loss, calc_metrics, args, val_idx):
     # input    = torch.Size([1, 3, h, w])
     # gt_image = torch.Size([1, h, w])
     images, gt_image, img_names, scale_float = data
+    target = gt_image.to(device)
     assert len(images.size()) == 4 and len(gt_image.size()) == 3
     assert images.size()[2:] == gt_image.size()[1:]
     batch_pixel_size = images.size(0) * images.size(2) * images.size(3)
@@ -125,8 +128,7 @@ def eval_minibatch(data, net, criterion, val_loss, calc_metrics, args, val_idx):
                 if scale != 1.0:
                     inputs = resize_tensor(inputs, infer_size)
 
-                inputs = {'images': inputs, 'gts': gt_image}
-                inputs = {k: v.cuda() for k, v in inputs.items()}
+                inputs = {'images': inputs.to(device), 'gts': target}
 
                 # Expected Model outputs:
                 #   required:
@@ -155,16 +157,13 @@ def eval_minibatch(data, net, criterion, val_loss, calc_metrics, args, val_idx):
                     output = output + _pred
 
     output = output / len(scales) / len(flips)
-    assert_msg = 'output_size {} gt_cuda size {}'
-    gt_cuda = gt_image.cuda()
-    assert_msg = assert_msg.format(
-        output.size()[2:], gt_cuda.size()[1:])
-    assert output.size()[2:] == gt_cuda.size()[1:], assert_msg
+    assert_msg = f'output_size {output.shape[2:]} target size {target.shape[1:]}'
+    assert output.shape[2:] == target.shape[1:], assert_msg
     assert output.size()[1] == cfg.DATASET.NUM_CLASSES, assert_msg
 
     # Update loss and scoring datastructure
     if calc_metrics:
-        val_loss.update(criterion(output, gt_image.cuda()).item(),
+        val_loss.update(criterion(output, target).item(),
                         batch_pixel_size)
 
     output_data = torch.nn.functional.softmax(output, dim=1).cpu().data

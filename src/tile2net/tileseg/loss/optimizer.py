@@ -141,16 +141,24 @@ def forgiving_state_restore(net, loaded_dict):
     Handle partial loading when some tensors don't match up in size.
     Because we want to use models that were trained off a different
     number of classes.
+
+    Match checkpoint keys across wrapped and unwrapped models.
     """
 
     net_state_dict = net.state_dict()
     new_loaded_dict = {}
-    for k in net_state_dict:
-        new_k = k
-        if new_k in loaded_dict and net_state_dict[k].size() == loaded_dict[new_k].size():
-            new_loaded_dict[k] = loaded_dict[new_k]
-        else:            
-            logger.debug("Skipped loading parameter {}".format(k))
+    for name, parameter in net_state_dict.items():
+        loaded = loaded_dict.get(name)
+        if loaded is None:
+            alternate_name = (
+                name.removeprefix('module.') if name.startswith('module.')
+                else f'module.{name}'
+            )
+            loaded = loaded_dict.get(alternate_name)
+        if loaded is not None and loaded.shape == parameter.shape:
+            new_loaded_dict[name] = loaded
+        else:
+            logger.debug('Skipped loading parameter %s', name)
     net_state_dict.update(new_loaded_dict)
     net.load_state_dict(net_state_dict)
     return net

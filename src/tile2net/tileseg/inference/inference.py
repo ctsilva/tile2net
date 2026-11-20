@@ -165,10 +165,18 @@ class Inference:
 
     def __init__(self, args: Namespace):
         self.args = args
+        self.device = torch.device(args.device)
         args.model.eval = normalize_inference_eval_mode(args.model.eval)
         cfg.MODEL.EVAL = args.model.eval
         if not 0 <= args.dump_percent <= 100:
             raise ValueError('dump_percent must be between 0 and 100.')
+
+        args.world_size = 1
+        if self.device.type == 'cuda':
+            self._configure_cuda()
+        else:
+            logger.info('Using CPU for inference.')
+
         if args.dump_percent:
             if not os.path.exists(args.result_dir):
                 # os.mkdir(args.result_dir, )
@@ -192,24 +200,25 @@ class Inference:
 
         args.best_record = dict(epoch=-1, iter=0, val_loss=1e10, acc=0, acc_cls=0, mean_iu=0, fwavacc=0)
 
-        # Enable CUDNN Benchmarking optimization
-        torch.backends.cudnn.benchmark = True
-        if args.deterministic:
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-
-        args.world_size = 1
-
         # Test Mode run two epochs with a few iterations of training and val
         if args.options.test_mode:
             args.max_epoch = 2
 
+        assert args.result_dir is not None, 'need to define result_dir arg'
+
+    def _configure_cuda(self) -> None:
+        args = self.args
         num_gpus = torch.cuda.device_count()
         if not torch.cuda.is_available() or num_gpus < 1:
             raise RuntimeError(
                 'Tile2Net inference requires a CUDA-capable PyTorch runtime. '
-                'Run generation separately on CPU or request a GPU compute node.'
+                'Use --device cpu to run without CUDA.'
             )
+
+        torch.backends.cudnn.benchmark = not args.deterministic
+        if args.deterministic:
+            torch.backends.cudnn.deterministic = True
+
         if num_gpus > 1:
             if args.model.eval == 'test':
                 # Single GPU setup
@@ -236,13 +245,10 @@ class Inference:
                 f'Using CUDA device 0: {torch.cuda.get_device_name(0)}.'
             )
 
-        assert args.result_dir is not None, 'need to define result_dir arg'
-
     def inference(self, rasterfactory=None):
         train_loader: DataLoader
         val_loader: DataLoader
         train_obj: datasets.Loader
-        net: torch.nn.parallel.DataParallel
         optim: torch.optim.sgd.SGD
         args = self.args
 
@@ -254,7 +260,7 @@ class Inference:
         assert_and_infer_cfg(args)
         prep_experiment(args)
         train_loader, val_loader, train_obj = datasets.setup_loaders(args)
-        criterion, criterion_val = get_loss(args)
+        criterion, criterion_val = get_loss(args, device=self.device)
         if args.model.snapshot:
             if 'ASSETS_PATH' in args.model.snapshot:
                 args.model.snapshot = args.model.snapshot.replace('ASSETS_PATH', cfg.ASSETS_PATH)
@@ -274,21 +280,24 @@ class Inference:
             msg = "Loading weights from: checkpoint={}".format(args.model.snapshot)
             logger.info(msg)
 
-        net: tile2net.tileseg.network.ocrnet.MscaleOCR = network.get_net(args, criterion)
+        model = network.get_net(args, criterion, device=self.device)
+        optim, scheduler = get_optimizer(args, model)
+        net = model
+        if self.device.type == 'cuda':
+            net = network.wrap_network_in_dataparallel(args, model)
 
-        optim, scheduler = get_optimizer(args, net)
-
-        net = network.wrap_network_in_dataparallel(args, net)
-        if not next(net.parameters()).is_cuda:
-            raise RuntimeError('Model parameters were not placed on CUDA.')
-        logger.info('CUDA model placement verified.')
+        device_name = self.device.type.upper()
+        if next(net.parameters()).device.type != self.device.type:
+            raise RuntimeError(f'Model parameters were not placed on {device_name}.')
+        logger.info('%s model placement verified.', device_name)
         if args.restore_optimizer:
             restore_opt(optim, checkpoint)
         if args.restore_net:
             restore_net(net, checkpoint)
         if args.options.init_decoder:
-            net.module.init_mods()
-        torch.cuda.empty_cache()
+            model.init_mods()
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
 
         if args.tile2net:
             if rasterfactory:
@@ -331,7 +340,7 @@ class Inference:
     def validate(
             self,
             val_loader: DataLoader,
-            net: torch.nn.parallel.DataParallel,
+            net: torch.nn.Module,
             criterion: tile2net.tileseg.loss.utils.CrossEntropyLoss2d,
             optim: torch.optim.sgd.SGD,
             epoch: int,
@@ -508,23 +517,28 @@ class RemoteInference(Inference):
 @commandline
 def inference(args: Namespace):
     if args.local:
-        inference = LocalInference(args)
+        runner = LocalInference(args)
     elif args.remote:
-        inference = RemoteInference(args)
+        runner = RemoteInference(args)
     else:
-        inference = Inference(args)
-    torch.cuda.reset_peak_memory_stats()
+        runner = Inference(args)
+    using_cuda = runner.device.type == 'cuda'
+    if using_cuda:
+        torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
-    result = inference.inference()
+    result = runner.inference()
     elapsed = time.perf_counter() - started
-    allocated = torch.cuda.max_memory_allocated() / 2 ** 20
-    reserved = torch.cuda.max_memory_reserved() / 2 ** 20
-    logger.info(
-        f'CUDA_METRICS device={torch.cuda.get_device_name(args.local_rank)!r} '
-        f'elapsed_seconds={elapsed:.3f} '
-        f'peak_allocated_mib={allocated:.1f} '
-        f'peak_reserved_mib={reserved:.1f}'
-    )
+    if using_cuda:
+        allocated = torch.cuda.max_memory_allocated() / 2 ** 20
+        reserved = torch.cuda.max_memory_reserved() / 2 ** 20
+        logger.info(
+            f'CUDA_METRICS device={torch.cuda.get_device_name(args.local_rank)!r} '
+            f'elapsed_seconds={elapsed:.3f} '
+            f'peak_allocated_mib={allocated:.1f} '
+            f'peak_reserved_mib={reserved:.1f}'
+        )
+    else:
+        logger.info('CPU_METRICS elapsed_seconds=%.3f', elapsed)
     return result
 
 

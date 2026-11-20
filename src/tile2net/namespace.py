@@ -415,6 +415,7 @@ class Namespace(
     distributed: bool = None
     default_scale: float = None
     deterministic: bool = None
+    device: str = 'cuda'
     do_flip: bool = None
     dump_all_images: bool = None
     dump_assets: bool = None
