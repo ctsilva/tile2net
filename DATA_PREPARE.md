@@ -1,3 +1,20 @@
+### Local GeoTIFFs
+
+`generate` accepts local 8-bit RGB or grayscale GeoTIFFs with a defined CRS. Pass
+an area of interest with `--location` and repeat `--geotiff` for each source file.
+The first valid pixel wins where sources overlap. Tile2Net reprojects imagery to
+Web Mercator, writes RGB XYZ tiles, and stitches them for inference. Areas without
+imagery within the tile grid are filled with black. Inference skips stitched tiles
+with no imagery at all. A grid with no valid imagery raises an error.
+
+```bash
+python -m tile2net generate --name local-ortho --output ./output --zoom 20 \
+  --location '33.7533178727,-84.3871879578,33.7513196897,-84.3847846985' \
+  --geotiff /path/to/west.tif --geotiff /path/to/east.tif
+```
+
+Use `--stitch_step` to control the size of the inputs sent to the model.
+
 ### Tile Images
 
 Tile images are raster tiles delivered as image files, typically in PNG format, and they serve as the primary input for
@@ -27,10 +44,8 @@ the `Raster.stitch` method.
 
 #### Tile Image Format
 
-Tile2Net supports the PNG and JPG (JPEG) image formats. More formats may be supported in upcoming versions.  
-If tile images that you already have are in TIFF format, they need to be converted to XYZ in PNG.
-To do that you can use QGIS and the “Generate XYZ Tiles (Directory)” tool to do the conversion.
-Once that’s created, you can pass its path implicating the format of the files, e.g. path/to/tiles/z/x/y.ext
+Tile2Net accepts XYZ tiles in PNG and JPEG format. Use `--input` with a path
+template such as `path/to/tiles/z/x/y.png`.
 The implicit path can contain the zoom level, e.g. path/to/tiles/z/x/y.ext, or it can be like path/to/tiles/x_y.ext. 
 
 To see an example, check out our [jupyter notebook](examples/inference.ipynb). 

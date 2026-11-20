@@ -43,7 +43,8 @@ python -m pip install -e .
 ```
 
 ```{note}
-The period at the end is important! This installs every library in the [requirements-dev.txt](https://github.com/VIDA-NYU/tile2net/blob/main/requirements-dev.txt) file
+This installs the runtime dependencies. Add `.[notebooks]`, `.[docs]`, or
+`.[test]` to install Jupyter, documentation tools, or pytest, respectively.
 ```
 
 ## Step 4: Start Generating a Network!

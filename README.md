@@ -104,6 +104,10 @@ conda activate testenv
 python -m pip install -e .
 ```
 
+Optional extras provide tools for notebooks (`.[notebooks]`), documentation
+(`.[docs]`), and testing (`.[test]`). Install all three from the repository with
+`python -m pip install -r requirements-dev.txt`.
+
 ## Create Your First Project
 
 
@@ -111,8 +115,8 @@ Tile2Net exposes two commands, `generate` and `inference`, both backed by the
 `Raster` module.
 
 `generate` creates the project structure, downloads and verifies the two model
-checkpoints, downloads supported imagery or reads user-provided tiles, stitches
-the inference inputs, and writes project metadata. The final JSON emitted to
+checkpoints, and prepares imagery from a provider, local XYZ tiles, or GeoTIFFs.
+It stitches the inference inputs and writes project metadata. The final JSON emitted to
 standard output can be piped directly to `inference`. See
 [BASICS.md](https://github.com/VIDA-NYU/tile2net/blob/main/BASICS.md) for the
 underlying concepts and supported imagery sources.
@@ -203,6 +207,36 @@ uv run python -m tile2net generate \
       --eval test \
       --dump_percent 0
 ```
+
+## Benchmarking a local crop
+
+Save the bounding box, zoom and stitch size in a JSON settings file. For example,
+the Atlanta crop uses these settings.
+
+```json
+{
+  "location": "33.7533178727,-84.3871879578,33.7513196897,-84.3847846985",
+  "zoom": 20,
+  "stitch_step": 4
+}
+```
+
+Run the same crop on CPU and Metal with the model checkpoints already cached.
+The output directory must be new so each run starts with fresh tile outputs.
+
+```bash
+uv run python examples/benchmark.py settings.json \
+  --geotiff /path/to/orthophotos/*.tif --device cpu --device mps \
+  --output ./atlanta-benchmark --repeats 2
+```
+
+For existing XYZ imagery, omit `--geotiff` and set `input_pattern` in the JSON to
+a template such as `xyz20/x_y.png` relative to that file. Each run saves its logs
+and network, and `report.json` records wall time, segmentation, per-tile
+postprocessing, and network construction separately. The benchmark reports how
+many predicted crosswalk lines connect to sidewalks at both ends. Pass
+`--reference-sidewalks` with a georeferenced line file to measure the share of
+traced sidewalk length within the specified tolerance of the predicted network.
 
 ## Running Interactively
 

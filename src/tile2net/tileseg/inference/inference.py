@@ -380,18 +380,23 @@ class Inference:
         net.eval()
         val_loss = AverageMeter()
         iou_acc = 0
-        pred = dict()
-        _temp = dict.fromkeys([i for i in range(10)], None)
+        segmentation_seconds = 0.0
+        tile_postprocessing_seconds = 0.0
+        network_seconds = 0.0
+        tile_count = 0
         for val_idx, data in enumerate(val_loader):
             input_images, labels, img_names, _ = data
 
             # Run network
+            started = time.perf_counter()
             assets, _iou_acc = eval_minibatch(
                     data, net, criterion, val_loss, calc_metrics, args, val_idx,
             )
+            segmentation_seconds += time.perf_counter() - started
+            tile_count += len(img_names)
             iou_acc += _iou_acc
-            input_images, labels, img_names, _ = data
 
+            started = time.perf_counter()
             dumpdict = dict(
                     gt_images=labels,
                     input_images=input_images,
@@ -404,6 +409,7 @@ class Inference:
             else:
                 dump = dumper.dump(dumpdict, val_idx)
             gdfs.extend(dump)
+            tile_postprocessing_seconds += time.perf_counter() - started
 
             if (
                     args.options.test_mode
@@ -416,6 +422,7 @@ class Inference:
 
         if testing:
             if grid:
+                started = time.perf_counter()
                 # todo: for now we concate from a list of all the polygons generated during the session;
                 #   eventually we will serialize all the files and then use dask for batching
                 if not gdfs:
@@ -432,6 +439,13 @@ class Inference:
                     poly_network,
                     output_format=args.vector_format,
                 )
+                network_seconds = time.perf_counter() - started
+
+        logger.info(
+            'STAGE_METRICS tiles=%d segmentation_seconds=%.6f '
+            'tile_postprocessing_seconds=%.6f network_seconds=%.6f',
+            tile_count, segmentation_seconds, tile_postprocessing_seconds, network_seconds,
+        )
 
 
 

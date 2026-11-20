@@ -86,8 +86,7 @@ class PedNet:
         """
 
         # query to find crosswalks intersecting with two or more sidewalks
-        inp, res = swp.geometry.values.sindex.query_bulk(cwp.geometry.values,
-                                                         predicate="intersects")
+        inp, res = swp.sindex.query(cwp.geometry, predicate="intersects")
         unique, counts = np.unique(inp, return_counts=True)
         meds = np.unique(res[np.isin(inp, unique[counts >= 2])])
 
@@ -299,7 +298,7 @@ class PedNet:
             smoothed = wrinkle_remover(ntw, 1.5)
             return smoothed
 
-    def create_sidewalks(self):
+    def create_sidewalks(self, crosswalk_endpoints=None):
         """
         Create sidewalk network
 
@@ -325,16 +324,13 @@ class PedNet:
             sw_uni_line2 = sw_uni_lines.copy()
 
             try:
-                sw_cl1 = clean_deadend_dangles(sw_uni_line2)
+                sw_cl1 = clean_deadend_dangles(sw_uni_line2, crosswalk_endpoints=crosswalk_endpoints)
                 sw_extended = extend_lines(sw_cl1, 10, extension=0)
 
                 sw_cleaned = remove_false_nodes(sw_extended)
-                sw_cleaned.reset_index(drop=True, inplace=True)
-                sw_cleaned.geometry = sw_cleaned.geometry.set_crs(3857)
-
-                self.sidewalk = sw_cleaned
-            except:
-                # logging.info('cannot save modified')
+                self.sidewalk = sw_cleaned.reset_index(drop=True).set_crs(3857)
+            except (ValueError, shapely.errors.GEOSException) as error:
+                logging.warning('Sidewalk topology cleanup failed: %s', error)
                 self.sidewalk = sw_uni_lines
         else:
             self.sidewalk = gpd.GeoDataFrame(geometry=[], crs=3857)
@@ -347,11 +343,11 @@ class PedNet:
         """
         logging.info('Starting network creation...')
 
-        self.create_sidewalks()
         self.create_crosswalk()
 
         # connect the crosswalks to the nearest sidewalks
         points = get_line_sepoints(self.crosswalk)
+        self.create_sidewalks(crosswalk_endpoints=points)
 
         # query LineString geometry to identify points intersecting 2 geometries
         # inp, res = self.crosswalk.sindex.query(geo2geodf(points).geometry,

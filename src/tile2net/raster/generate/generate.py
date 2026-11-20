@@ -1,6 +1,8 @@
 __all__ = ['generate', 'Namespace']
 
 import argh
+from pathlib import Path
+from tempfile import gettempdir
 from typing import Any
 
 from tile2net.raster.generate.commandline import commandline, Namespace
@@ -17,9 +19,25 @@ def _raster_from_info(info: dict[str, Any]) -> Any:
 @commandline
 def generate(args: Namespace) -> str:
     """Generate a JSON file representing the tile2net project file structure."""
-    raster = _raster_from_info(args.__dict__)
+    info = vars(args).copy()
+    geotiffs = info.pop('geotiff', None)
+    if geotiffs:
+        if info.get('input_dir') or info.get('source'):
+            raise argh.CommandError('--geotiff cannot be combined with --input or --source.')
+        if info['tile_step'] != 1:
+            raise argh.CommandError('GeoTIFF generation requires --tile_step 1. Use --stitch_step to combine tiles.')
+        if args.stitch_step < 1 or args.stitch_step & (args.stitch_step - 1):
+            raise argh.CommandError('--stitch_step must be a positive power of two.')
+        output = Path(info.get('output_dir') or Path(gettempdir()) / 'tile2net').expanduser().resolve()
+        tile_dir_name = f"{info['base_tilesize']}_{info['zoom']}"
+        input_dir = output / info['name'] / 'tiles' / 'geotiff' / tile_dir_name
+        info.update(output_dir=str(output), input_dir=str(input_dir / 'x_y.png'))
+    raster = _raster_from_info(info)
     ensure_weights()
-    raster.generate(args.stitch_step)
+    if geotiffs:
+        raster.generate(args.stitch_step, geotiffs=geotiffs)
+    else:
+        raster.generate(args.stitch_step)
     # raster.save_info_json(new_tstep=args.stitch_step)
     # json.dump(
     #     dict(raster.project.structure),

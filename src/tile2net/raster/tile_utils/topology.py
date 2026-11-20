@@ -12,10 +12,12 @@ import shapely
 from shapely.geometry import LineString, Point, MultiLineString, Polygon
 import operator
 from tile2net.raster.tile_utils.geodata_utils import geo2geodf
-import collections
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from tile2net.raster.tile_utils.momepy_shapes import *
 
 METRIC_CRS = 'EPSG:3857'
+CROSSWALK_LINK_DISTANCE = 12
 
 def morpho_atts(gdf):
     """Using momepy but removed the import since it was slow and depends on pygeos
@@ -144,7 +146,7 @@ def vectorize_points(lst):
         return np.array([], dtype=object)
 
 
-def get_shortest(gdf1, gdf2, f_type: str, max_dist=12):
+def get_shortest(gdf1, gdf2, f_type: str, max_dist=CROSSWALK_LINK_DISTANCE):
     nearest_sw_s = gdf1.sindex.nearest(gdf2.geometry, max_distance=max_dist)
     # First subarray of indices contains input geometry indices. (here pdfS)
     # The second subarray of indices contains tree geometry indices. (here sidewalks)
@@ -529,74 +531,30 @@ def trim_checkempty(line, trim1, trim2):
         return line_tr
 
 
-def clean_deadend_dangles(gdf, dang_trh=25, dead_trh=18):
-    df = gdf.reset_index(drop=True).explode().reset_index(drop=True)
-
-    geom = df.geometry.values
-
-    target = df
-    itself = True
-
-    # extract array of coordinates and number per geometry
-    coords = shapely.get_coordinates(geom)
-    indices = shapely.get_num_coordinates(geom)
-
-    # generate a list of start and end coordinates and create point geometries
-    edges = [0]
-    i = 0
-    for ind in indices:
-        ix = i + ind
-        edges.append(ix - 1)
-        edges.append(ix)
-        i = ix
-    edges = edges[:-1]
-    points = vectorize_points(np.unique(coords[edges], axis=0))
-
-    # query LineString geometry to identify points intersecting 2 geometries
-    # tree = pygeos.STRtree(geom)
-    inp, res = df.sindex.query_bulk(geo2geodf(points).geometry, predicate="intersects")
-    unique, counts = np.unique(inp, return_counts=True)
-    ends = np.unique(res[np.isin(inp, unique[counts == 1])])
-
-    dangles = []
-    dangind = []
-    deads = []
-    deadind = []
-    # iterate over cul-de-sac-like segments and attempt to snap them to street network
-    for line in ends:
-
-        l_coords = shapely.get_coordinates(geom[line])
-
-        start = Point(l_coords[0])
-        end = Point(l_coords[-1])
-
-        first = list(geom.sindex.query(start, predicate="intersects"))
-        second = list(geom.sindex.query(end, predicate="intersects"))
-        first.remove(line)
-        second.remove(line)
-
-        t = target if not itself else target.drop(line)
-
-        if (first and not second) or (not first and second):
-            deads.append(geom[line])
-            deadind.append(line)
-
-        if not first and not second:
-            dangles.append(geom[line])
-            dangind.append(line)
-
-    dang = gpd.GeoDataFrame(dangind, geometry=dangles)
-    dea = gpd.GeoDataFrame(deadind, geometry=deads)
-    dang.set_crs(METRIC_CRS, inplace=True)
-    dea.set_crs(METRIC_CRS, inplace=True)
-    drop1 = dang[dang.length < dang_trh][0]
-    drop2 = dea[dea.length < dead_trh][0]
-    drop_list = set(list(drop1) + list(drop2))
-
-    gdf.drop(drop_list, inplace=True)
-
-    return gdf
-
+def clean_deadend_dangles(gdf, dang_trh=25, dead_trh=18, *, crosswalk_endpoints=None):
+    """Prune short lines with zero or one connected endpoint."""
+    lines = gdf.explode(ignore_index=True)
+    lines = lines.loc[lines.geometry.notna() & ~lines.geometry.is_empty].copy()
+    geometry = lines.geometry.array
+    endpoints = np.column_stack((
+        shapely.get_point(geometry, 0),
+        shapely.get_point(geometry, -1),
+    )).ravel()
+    endpoint_ids, neighbors = lines.sindex.query(endpoints, predicate="intersects")
+    connected = np.zeros(len(endpoints), dtype=bool)
+    connected[endpoint_ids[neighbors != endpoint_ids // 2]] = True
+    connections = connected.reshape(-1, 2).sum(axis=1)
+    lengths = lines.length.to_numpy()
+    prune = ((connections == 0) & (lengths < dang_trh)) | (
+        (connections == 1) & (lengths < dead_trh)
+    )
+    prune &= ~shapely.is_closed(geometry)
+    if crosswalk_endpoints is not None and len(crosswalk_endpoints):
+        _, connections = lines.sindex.nearest(
+            crosswalk_endpoints, max_distance=CROSSWALK_LINK_DISTANCE,
+        )
+        prune[connections] = False
+    return lines.loc[~prune].reset_index(drop=True)
 
 
 def get_crosswalk_cnl(geom):
@@ -649,11 +607,11 @@ def find_medianisland(swp, cwp):
     sw_pg = swp.geometry.values
     cw_pg = cwp.geometry.values
 
-    inp, res = swp.sindex.query_bulk(cwp, predicate="intersects")
+    inp, res = swp.sindex.query(cwp.geometry, predicate="intersects")
     unique, counts = np.unique(inp, return_counts=True)
     meds = np.unique(res[np.isin(inp, unique[counts >= 2])])
 
-    possible_median = swp[swp.index.isin(meds)]
+    possible_median = swp.iloc[meds]
 
     smallers = possible_median[possible_median.area < 100]
     return smallers
@@ -760,98 +718,47 @@ MOMEPY LIBRARY WRAPPERS
 
 
 def remove_false_nodes(gdf):
-    """Wrapper around momepy to remove pygeos dependency.
-    Clean topology of existing LineString geometry by removal of nodes of degree 2.
-    Returns the original gdf if there's no node of degree 2.
-    Parameters
-    ----------
-    gdf : GeoDataFrame, GeoSeries, array of pygeos geometries
-        (Multi)LineString data of street network
-    Returns
-    -------
-    gdf : GeoDataFrame, GeoSeries
-    See also
-    --------
-    momepy.extend_lines
-    momepy.close_gaps
-    """
+    """Merge chains through degree-two endpoints while keeping junctions."""
     if isinstance(gdf, (gpd.GeoDataFrame, gpd.GeoSeries)):
-        # explode to avoid MultiLineStrings
-        # reset index due to the bug in GeoPandas explode
-        # if GPD_10:
-        #     df = gdf.reset_index(drop=True).explode(ignore_index=True)
-        # else:
-        df = gdf.reset_index(drop=True).explode().reset_index(drop=True)
-
-        # get underlying pygeos geometry
-        geom = df.geometry.values
+        lines = gdf.explode(ignore_index=True)
     else:
-        geom = gdf
-        df = gpd.GeoSeries(gdf)
+        lines = gpd.GeoSeries(gdf).explode(ignore_index=True)
 
-    # extract array of coordinates and number per geometry
-    coords = shapely.get_coordinates(geom)
-    indices = shapely.get_num_coordinates(geom)
+    geometry = lines.geometry.array
+    points = get_line_sepoints(lines)
+    point_ids, line_ids = lines.sindex.query(points, predicate="intersects")
+    at_shared_endpoint = (np.bincount(point_ids, minlength=len(points))[point_ids] == 2)
+    shared_points = point_ids[at_shared_endpoint]
+    pairs = line_ids[at_shared_endpoint][np.argsort(shared_points)].reshape(-1, 2)
+    # Both lines must terminate at the node. A line meeting the interior of
+    # another line forms a junction and must not be merged through it.
+    nodes = points[np.sort(shared_points)[::2]]
+    pairs = pairs[
+        shapely.touches(geometry[pairs[:, 0]], nodes)
+        & shapely.touches(geometry[pairs[:, 1]], nodes)
+    ]
+    if not len(pairs):
+        return gdf
 
-    # generate a list of start and end coordinates and create point geometries
-    edges = [0]
-    i = 0
-    for ind in indices:
-        ix = i + ind
-        edges.append(ix - 1)
-        edges.append(ix)
-        i = ix
-    edges = edges[:-1]
-    points = vectorize_points(np.unique(coords[edges], axis=0))
-    # query LineString geometry to identify points intersecting 2 geometries
-    inp, res = df.sindex.query_bulk(geo2geodf(points).geometry, predicate="intersects")
-    unique, counts = np.unique(inp, return_counts=True)
-    merge = np.unique(res[np.isin(inp, unique[counts == 2])])
-
-    if len(merge) > 0:
-        # filter duplications and create a dictionary with indication of components to
-        # be merged together
-        dups = [item for item, count in collections.Counter(merge).items() if count > 1]
-        split = np.split(merge, len(merge) / 2)
-        components = {}
-        for i, a in enumerate(split):
-            if a[0] in dups or a[1] in dups:
-                if a[0] in components:
-                    i = components[a[0]]
-                elif a[1] in components:
-                    i = components[a[1]]
-            components[a[0]] = i
-            components[a[1]] = i
-
-        # iterate through components and create new geometries
-        new = []
-        for c in set(components.values()):
-            keys = []
-            for item in components.items():
-                if item[1] == c:
-                    keys.append(item[0])
-            new.append(shapely.line_merge(shapely.union_all(geom[keys])))
-
-        # remove incorrect geometries and append fixed versions
-        df = df.drop(merge)
-        #  if GPD_10:
-        #      final = gpd.GeoSeries(new).explode(ignore_index=True)
-        # else:
-        final = gpd.GeoSeries(new).explode().reset_index(drop=True)
-        if isinstance(gdf, gpd.GeoDataFrame):
-            return pd.concat(
-                [
-                    df,
-                    gpd.GeoDataFrame(
-                        {df.geometry.name: final}, geometry=df.geometry.name
-                    ),
-                ],
-                ignore_index=True,
-            )
-        return pd.concat([df, final], ignore_index=True)
-
-    # if there's nothing to fix, return the original dataframe
-    return gdf
+    adjacency = csr_matrix(
+        (np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])),
+        shape=(len(lines), len(lines)),
+    )
+    _, groups = connected_components(adjacency, directed=False)
+    merged = np.bincount(groups)[groups] > 1
+    components = {}
+    for index in np.flatnonzero(merged):
+        components.setdefault(groups[index], []).append(index)
+    combined = [
+        shapely.line_merge(shapely.union_all(geometry[indices]))
+        for indices in components.values()
+    ]
+    new_lines = gpd.GeoSeries(combined, crs=lines.crs).explode(ignore_index=True)
+    if isinstance(lines, gpd.GeoDataFrame):
+        new_lines = gpd.GeoDataFrame(
+            {lines.geometry.name: new_lines}, geometry=lines.geometry.name,
+        )
+    return pd.concat([lines.loc[~merged], new_lines], ignore_index=True)
 
 
 def extend_lines(gdf, tolerance, target=None, barrier=None, extension=0):
@@ -1204,7 +1111,7 @@ def line_to_line(gdf, target, tolerance, extension):
     points = vectorize_points(np.unique(coords[edges], axis=0))
     # query LineString geometry to identify points intersecting 2 geometries
     # tree = pygeos.STRtree(geom)
-    inp, res = df.sindex.query_bulk(geo2geodf(points).geometry, predicate="intersects")
+    inp, res = df.sindex.query(geo2geodf(points).geometry, predicate="intersects")
     unique, counts = np.unique(inp, return_counts=True)
     ends = np.unique(res[np.isin(inp, unique[counts == 1])])
 

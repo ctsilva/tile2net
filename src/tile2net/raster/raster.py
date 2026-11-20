@@ -400,7 +400,7 @@ class Raster(Grid):
     Stitch Tiles
     """
 
-    def stitch(self, step: int, force=False) -> None:
+    def stitch(self, step: int, force=False, *, geotiffs=None) -> list[int] | None:
         """
         Stitch tiles
 
@@ -418,8 +418,8 @@ class Raster(Grid):
 
         Returns
         ------
-        None.
-            Nothing is returned.
+        list[int] | None
+            IDs of stitched tiles with GeoTIFF coverage when using local GeoTIFFs.
         """
         logger.info(f"Stitching {len(self.tiles):,} tiles...")
         self.stitch_step = step
@@ -427,6 +427,16 @@ class Raster(Grid):
         self.update_tiles()
         if self.boundary_path is not None:
             self.get_in_boundary(path=self.boundary_path)
+        covered_ids = None
+        if geotiffs:
+            from tile2net.raster.geotiff import write_geotiff_tiles
+
+            coverage = write_geotiff_tiles(
+                geotiffs, self.tiles.flat, self.project.tiles.static.path, self.base_tilesize,
+            )
+            blocks = coverage.reshape(self.width // step, step, self.height // step, step)
+            covered_ids = np.flatnonzero(blocks.any(axis=(1, 3))).tolist()
+            force = True
         self.download()
         self.project.tiles.stitched.path.mkdir(parents=True, exist_ok=True)
         if not (self.source or self.input_dir):
@@ -604,6 +614,7 @@ class Raster(Grid):
         for write in writes:
             write.result()
         threads.shutdown(wait=True)
+        return covered_ids
 
     def download(self, retry: bool = True):
         """
@@ -785,6 +796,7 @@ class Raster(Grid):
             bbox=self.bbox,
             location=self.location,
             size=self.tile_size,
+            base_tilesize=self.base_tilesize,
             zoom=self.zoom,
             crs=self.crs,
             tile_step=self.tile_step,
@@ -805,7 +817,8 @@ class Raster(Grid):
             city_info["size"] = self.tile_size * kwargs["new_tstep"]
             city_info["tile_step"] = kwargs["new_tstep"]
 
-        if self.boundary_path is not None:
+        covered_ids = kwargs.get('covered_tile_ids')
+        if self.boundary_path is not None or covered_ids is not None:
             active_grid = self
             if city_info['tile_step'] != self.tile_step:
                 active_grid = Grid(
@@ -819,7 +832,11 @@ class Raster(Grid):
                     output_dir=self.output_dir,
                     boundary_path=self.boundary_path,
                 )
-            city_info['active_tile_ids'] = active_grid.active_tile_ids
+            active_ids = active_grid.active_tile_ids
+            if covered_ids is not None:
+                covered = set(covered_ids)
+                active_ids = [tile_id for tile_id in active_ids if tile_id in covered]
+            city_info['active_tile_ids'] = active_ids
 
         if "return_dict" in kwargs and kwargs["return_dict"]:
             city_info.update(city_info["project"])
@@ -847,7 +864,7 @@ class Raster(Grid):
             json.dump(data, f, indent=4)
 
     # @validate
-    def generate(self, step):
+    def generate(self, step, *, geotiffs=None):
         """
         generates the project structure,
         creates the tiles and saves the info json file
@@ -857,8 +874,8 @@ class Raster(Grid):
         step : int
             tile step to stitch the tiles
         """
-        self.stitch(step)
-        self.save_info_json(new_tstep=step)
+        covered_ids = self.stitch(step, geotiffs=geotiffs)
+        self.save_info_json(new_tstep=step, covered_tile_ids=covered_ids)
         self.save_csv()
         logger.info(f"Dumping to {self.project.tiles.info}")
         json.dump(

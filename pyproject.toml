@@ -24,7 +24,50 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
-dynamic = ["dependencies"]
+dependencies = [
+    "affine",
+    "argh==0.29.4",
+    "centerline",
+    "certifi",
+    "geopandas>=1.0",
+    "geopy",
+    "imageio",
+    "matplotlib",
+    "more-itertools",
+    "numpy>=1.26,<3",
+    "opencv-python",
+    "osmnx",
+    "pandas",
+    "pillow",
+    "psutil",
+    "pyarrow",
+    "pyogrio",
+    "pyproj",
+    "rasterio",
+    "requests>=2.32,<3",
+    "scikit-image",
+    "scipy",
+    "shapely>=2.0.7,<3",
+    "tabulate",
+    "toolz",
+    "torch",
+    "torchvision",
+    "tqdm",
+    "urllib3",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+notebooks = ["jupyter"]
+docs = [
+    "sphinx",
+    "myst-parser",
+    "sphinx-rtd-theme",
+    "nbsphinx",
+    "pandoc",
+    "sphinx-autobuild",
+    "sphinx-copybutton",
+]
 
 [project.urls]
 repository = "https://github.com/VIDA-NYU/tile2net"
@@ -40,9 +83,6 @@ requires = [
 
 [tool.setuptools]
 include-package-data = false
-
-[tool.setuptools.dynamic]
-dependencies = { file = ["requirements-dev.txt"] }
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -24,6 +24,10 @@ commandline = compose_left(
              'e.g. path/to/tiles/z/x/y.ext or path/to/tiles/x_y.ext'
     ),
     arg(
+        '--geotiff', action='append', metavar='FILE',
+        help='Georeferenced 8-bit imagery. Repeat for multiple files in priority order.',
+    ),
+    arg(
         '--output', '-o', type=str, dest='output_dir',
         help='The path to the output directory; "~/tmp/tile2net" by default'
     ),
@@ -82,6 +86,7 @@ class Namespace(argh.ArghNamespace):
     name: str
     location: str | list[float]
     input_dir: Optional[str]
+    geotiff: Optional[list[str]]
     output_dir: Optional[str]
     num_class: int
     base_tilesize: int

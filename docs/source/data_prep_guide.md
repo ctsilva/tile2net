@@ -33,10 +33,10 @@ the `Raster.stitch` method.
 
 ### Tile Image Format
 
-Tile2Net only supports the PNG image format. More formats may be supported in upcoming versions.  
-If tile images that you already have are in TIFF format, they need to be converted to XYZ in PNG.
-To do that you can use QGIS and the “Generate XYZ Tiles (Directory)” tool to do the conversion.
-Once that’s created, you can pass its path implicating the format of the files, e.g. path/to/tiles/z/x/y.ext
+Tile2Net accepts georeferenced 8-bit imagery with `generate --geotiff FILE`. Repeat
+`--geotiff` for neighboring sources and use `--location` to select the area to tile.
+For existing PNG or JPEG XYZ tiles, use `--input` with a path template such as
+`path/to/tiles/z/x/y.png`.
 The implicit path can contain the zoom level, e.g. path/to/tiles/z/x/y.ext, or it can be like path/to/tiles/x_y.ext. 
 
 To see an example, check out our [jupyter notebook](notebooks/quick_start_module.ipynb). 
@@ -61,4 +61,4 @@ Tile names are defined as `{X_tile}_{Y_tile}.{file_format}`.
 The X and Y coordinates are the position of the top left corner of the image (tile image position).
 A tile image file name could look like this: “154374_197085PNG”. (see tile position for more info).
 Although these numbers are based on the zoom level and number of tiles there is a mathematical way to convert them into
-geographic coordinates. 
+geographic coordinates.
