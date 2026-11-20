@@ -4,11 +4,13 @@ import json
 import os
 import subprocess
 import sys
+from importlib import import_module
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from tile2net.__main__ import main
 from tile2net.raster.raster import Raster
 from tile2net.raster.tile_utils.genutils import deg2num
 
@@ -84,7 +86,13 @@ def test_unknown_command_fails_without_traceback() -> None:
     assert "Traceback" not in result.stderr
 
 
-def test_generate_command_emits_valid_pipeline_metadata(tmp_path: Path) -> None:
+def test_generate_command_emits_valid_pipeline_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    generate = import_module("tile2net.raster.generate.generate")
+    monkeypatch.setattr(generate, "ensure_weights", lambda: None)
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     xtile, ytile = deg2num(40.7500, -74.0000, 19)
@@ -92,7 +100,7 @@ def test_generate_command_emits_valid_pipeline_metadata(tmp_path: Path) -> None:
         input_dir / f"{xtile}_{ytile}.png"
     )
 
-    result = run_cli(
+    main([
         "generate",
         "--location",
         "40.7490,-74.0000,40.7500,-73.9990",
@@ -106,10 +114,9 @@ def test_generate_command_emits_valid_pipeline_metadata(tmp_path: Path) -> None:
         "19",
         "--stitch_step",
         "1",
-    )
+    ])
 
-    assert result.returncode == 0, result.stderr
-    project = json.loads(result.stdout)
+    project = json.loads(capsys.readouterr().out)
     metadata_path = Path(project["tiles"]["info"])
     stitched_path = Path(project["tiles"]["stitched"])
 

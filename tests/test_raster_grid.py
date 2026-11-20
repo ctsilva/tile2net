@@ -10,6 +10,7 @@ import shapely
 
 from tile2net.raster.grid import Grid
 from tile2net.raster.raster import Raster
+from tile2net.raster.source import NewYorkCity
 
 LOCATION = [40.7490, -74.0000, 40.7500, -73.9990]
 
@@ -64,10 +65,40 @@ def test_vectorized_grid_geometry_matches_tiles_exactly(grid: Grid) -> None:
     )
 
     np.testing.assert_array_equal(actual_bounds, expected_bounds)
+    # Ring winding and the starting vertex may vary across polygon constructors.
     np.testing.assert_array_equal(
-        shapely.to_wkb(grid_gdf.geometry.array),
-        shapely.to_wkb(expected_geometry),
+        shapely.to_wkb(shapely.normalize(grid_gdf.geometry.array)),
+        shapely.to_wkb(shapely.normalize(expected_geometry)),
     )
+
+
+def test_raster_local_inputs_and_provider_metadata_are_isolated(tmp_path: Path) -> None:
+    first_path = tmp_path / "first" / "x_y.png"
+    second_path = tmp_path / "second" / "z" / "x" / "y.jpg"
+    raster_args = dict(location=LOCATION, output_dir=tmp_path / "output", zoom=19)
+    first = Raster(name="first", input_dir=first_path, **raster_args)
+    second = Raster(name="second", input_dir=second_path, **raster_args)
+    provider = Raster(name="provider", source=NewYorkCity(), **raster_args)
+
+    first_files = first.project.tiles.static.files()
+    second_files = second.project.tiles.static.files()
+    first_tile, second_tile = first.tiles.flat[0], second.tiles.flat[0]
+    assert next(first_files) == (
+        first_path.parent / f"{first_tile.xtile}_{first_tile.ytile}.png"
+    )
+    assert next(second_files) == (
+        tmp_path / "second" / "19" / str(second_tile.xtile) / f"{second_tile.ytile}.jpg"
+    )
+    assert first.extension == "png"
+    assert second.extension == "jpg"
+    assert first.save_info_json(return_dict=True)["input_dir"] == str(first_path)
+    info = provider.save_info_json(return_dict=True)
+    assert "input_dir" not in info
+    assert isinstance(Raster.from_info(info).source, NewYorkCity)
+
+    first.input_dir = second_path
+    assert first.extension == "jpg"
+    assert str(second.input_dir) == str(second_path)
 
 
 def test_grid_array_cache_is_reused_but_not_exposed(grid: Grid) -> None:

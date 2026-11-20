@@ -14,7 +14,6 @@ from tile2net.raster.tile_utils.topology import *
 from tile2net.raster.tile_utils.geodata_utils import (
     buffer_union_erode,
     geo2geodf,
-    set_gdf_crs,
     write_vector,
 )
 from tile2net.raster.tile_utils.topology import morpho_atts
@@ -309,17 +308,18 @@ class PedNet:
         None
         """
         sw_all = self.prepare_class_gdf('sidewalk')
+        if sw_all.empty:
+            warnings.warn('No sidewalk polygons found')
+            lines = None
+        else:
+            lines = self.create_lines(sw_all)
 
-        if len(sw_all) > 0:
-            swntw = self.create_lines(sw_all)
+        if lines is not None and not lines.empty:
             logging.info('..... creating the processed sidewalk network')
-            #
-            swntw.geometry = swntw.simplify(0.6)
-            sw_modif_uni = gpd.GeoDataFrame(
-                geometry=gpd.GeoSeries([geom for geom in swntw.unary_union.geoms]))
-            sw_modif_uni_met = set_gdf_crs(sw_modif_uni, 3857)
-            sw_uni_lines = sw_modif_uni_met.explode()
-            sw_uni_lines.reset_index(drop=True, inplace=True)
+            merged = lines.geometry.simplify(0.6).union_all()
+            sw_uni_lines = gpd.GeoDataFrame(
+                geometry=shapely.get_parts(merged), crs=3857,
+            ).explode(ignore_index=True)
             sw_uni_lines.geometry = sw_uni_lines.simplify(2)
             sw_uni_lines.dropna(inplace=True)
             sw_uni_line2 = sw_uni_lines.copy()
@@ -337,10 +337,7 @@ class PedNet:
                 # logging.info('cannot save modified')
                 self.sidewalk = sw_uni_lines
         else:
-            warnings.warn('No sidewalk polygons found')
-            self.sidewalk = gpd.GeoDataFrame({
-                'geometry': [],
-            }, crs=3857)
+            self.sidewalk = gpd.GeoDataFrame(geometry=[], crs=3857)
 
         self.sidewalk['f_type'] = 'sidewalk'
 

@@ -1,3 +1,4 @@
+import copy
 import glob
 import json
 import os
@@ -111,9 +112,15 @@ class Directory:
         self.name = name
 
     def __get__(self, instance: 'Directory', owner):
-        self.parent = instance
-        self.owner = owner
-        return self
+        if instance is None:
+            return self
+        bound = instance.__dict__.get(self.name)
+        if bound is None or bound.parent is not instance:
+            bound = copy.copy(self)
+            bound.parent = instance
+            bound.owner = owner
+            instance.__dict__[self.name] = bound
+        return bound
 
     # @directory_method
     def __fspath__(self):

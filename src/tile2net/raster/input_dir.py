@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
+import os
 import re
 from collections import deque
 from os import PathLike
@@ -10,30 +12,16 @@ from typing import Iterable, Iterator, Type
 from numpy import ndarray
 from toolz import curried, curry as cur, pipe
 
-from tile2net.raster.util import cached_descriptor
-import os
-
-
 if False:
     from tile2net.raster.raster import Raster
     from tile2net.raster.tile import Tile
 
 class InputDir:
-    @cached_descriptor
-    def format(self):
-        ...
-
-    @cached_descriptor
-    def root(self):
-        ...
-
-    @cached_descriptor
-    def original(self):
-        ...
-
-    @cached_descriptor
-    def extension(self):
-        ...
+    format: str | None = None
+    root: str | None = None
+    original: str | None = None
+    extension: str | None = None
+    raster: Raster | None = None
 
     def _match(self, string: str, characters: dict[str]):
         c = '|'.join(characters)
@@ -46,13 +34,8 @@ class InputDir:
         for i, c in enumerate('xyz')
     }
 
-    def __set__(self, instance: Raster, value: str | PathLike):
-        if value is None:
-            return
-        if isinstance(value, Path):
-            value = str(value)
-        value = os.path.normpath(value)
-
+    def _parse(self, value: str | PathLike[str]) -> None:
+        value = os.path.normpath(os.fspath(value))
         self.original = value
 
         try:
@@ -68,6 +51,8 @@ class InputDir:
             cur(set.__contains__),
             curried.keyfilter(d=self.characters),
         )
+        if not {'x', 'y'} <= CHARACTERS.keys():
+            raise ValueError(f'{self.name} failed to parse {value!r}')
         characters = CHARACTERS.copy()
 
         string = value
@@ -85,21 +70,6 @@ class InputDir:
             match = self._match(match[0], characters)
             result.appendleft(match)
 
-        # if not (
-        #     'x' in CHARACTERS
-        #     and 'y' in CHARACTERS
-        # ):
-        #     raise ValueError(f'{self.name} failed to parse ')
-        failed = [
-            c
-            for c in 'xy'
-            if c not in CHARACTERS
-        ]
-        if failed:
-            raise ValueError(
-                f'{self.name} failed to parse {value!r} '
-            )
-
         parts = []
         r = result[0]
         parts.append(r[0])
@@ -112,15 +82,30 @@ class InputDir:
         self.format = format
         self.dir = parts[0].rsplit('/', 1)[0]
 
-    # noinspection PyMethodOverriding
-    def __get__(self, instance: Raster, owner: Type[Raster]) -> InputDir:
-        from tile2net.raster.raster import Raster
-        self.raster: Raster = instance
-        self.Raster: Type[Raster] = owner
-        return self
+    def __get__(self, instance: Raster | None, owner: Type[Raster]) -> InputDir:
+        if instance is None:
+            return self
+        bound = instance.__dict__.get(self.name, self)
+        if bound.raster is not instance:
+            # Raster batches are shallow copies. Bind their inherited template to the new owner.
+            bound = copy.copy(bound)
+            bound.raster = instance
+            instance.__dict__[self.name] = bound
+        return bound
 
-    def __delete__(self, instance):
-        del self.format
+    def __set__(self, instance: Raster, value: str | PathLike[str] | None) -> None:
+        if value is None:
+            self.__delete__(instance)
+            return
+        bound = copy.copy(self)
+        bound.raster = instance
+        bound._parse(value)
+        instance.__dict__[self.name] = bound
+        instance.__dict__.pop('extension', None)
+
+    def __delete__(self, instance: Raster) -> None:
+        instance.__dict__.pop(self.name, None)
+        instance.__dict__.pop('extension', None)
 
     def __call__(self, tiles: ndarray = None) -> Iterator[Path]:
         if tiles is None:

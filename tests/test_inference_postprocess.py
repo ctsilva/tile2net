@@ -8,6 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 from PIL import Image
+from shapely.geometry import box
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("torchvision")
@@ -191,6 +192,27 @@ def test_empty_polygon_result_skips_network_creation(tmp_path: Path) -> None:
     assert network is None
     assert grid.ntw_poly.empty
     assert not grid.project.network.path.exists()
+
+
+@pytest.mark.parametrize(("width", "expected_lines"), [(30, 1), (4, 0)])
+def test_sidewalk_network_handles_single_or_missing_centerline(
+    tmp_path: Path,
+    width: int,
+    expected_lines: int,
+) -> None:
+    grid = Grid(name="sidewalk", location=LOCATION, output_dir=tmp_path, zoom=19)
+    sidewalk = gpd.GeoDataFrame(
+        {"f_type": ["sidewalk"]}, geometry=[box(0, 0, width, 4)], crs=3857,
+    )
+    builder = PedNet(poly=sidewalk, project=grid.project)
+
+    with pytest.warns(UserWarning, match="No crosswalks found"):
+        builder.convert_whole_poly2line()
+
+    result = gpd.read_parquet(grid.project.network.path / "sidewalk-network.parquet")
+    assert result.crs.to_epsg() == 4326
+    assert result.geom_type.tolist() == ["LineString"] * expected_lines
+    assert result["f_type"].tolist() == ["sidewalk"] * expected_lines
 
 
 def test_network_output_defaults_to_geoparquet(tmp_path: Path) -> None:
