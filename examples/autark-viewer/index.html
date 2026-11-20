@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore Tile2Net features on aerial imagery and review OpenStreetMap matches.">
+  <title>Tile2Net Visualizer</title>
+  <link rel="icon" href="./icon.svg?v=3" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="identity">
+      <img class="mark" src="./icon.svg?v=3" alt="" width="44" height="44">
+      <div><h1>Tile2Net Visualizer</h1><span class="project-name" id="project-name"></span></div>
+    </div>
+    <div class="mode-switch" role="group" aria-label="Workspace">
+      <button id="visualize-mode" type="button" aria-pressed="true" aria-controls="visualize-panel">Visualize</button>
+      <button id="review-mode" type="button" aria-pressed="false" aria-controls="review-panel">OSM review</button>
+    </div>
+  </header>
+  <main class="workbench" id="workspace">
+    <section class="map-panel card" aria-label="Project map">
+      <div class="map-toolbar">
+        <div class="map-selectors">
+          <div class="map-select">
+            <label for="basemap">Imagery</label>
+            <select id="basemap" disabled>
+              <option value="imagery">Tile2Net input</option>
+              <option value="esri">Esri World Imagery</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div class="map-select">
+            <label for="map-style">Style</label>
+            <select id="map-style" disabled>
+              <option value="standard">Standard</option>
+              <option value="atlas">Atlas</option>
+            </select>
+          </div>
+        </div>
+        <details class="layer-menu">
+          <summary>Layers</summary>
+          <fieldset class="layer-controls">
+            <legend class="sr-only">Map layers</legend>
+            <label><input type="checkbox" data-layer="network" checked> Predictions</label>
+            <label><input type="checkbox" data-layer="polygons" checked> Polygons</label>
+            <div class="opacity-control">
+              <div><label for="opacity">Polygon opacity</label><output id="opacity-value" for="opacity">35%</output></div>
+              <input id="opacity" type="range" min="0" max="100" value="35" disabled>
+            </div>
+            <label><input type="checkbox" data-layer="osm"> OSM</label>
+            <label id="reference-toggle"><input type="checkbox" data-layer="reference"> Reference</label>
+          </fieldset>
+        </details>
+      </div>
+      <div class="map-surface">
+        <canvas id="map" aria-label="Autark aerial map" aria-describedby="map-help"></canvas>
+        <p id="map-status" role="status">Loading map…</p>
+        <div class="map-actions" role="group" aria-label="Map navigation">
+          <div class="zoom-step">
+            <button id="zoom-in" type="button" aria-label="Zoom in" title="Zoom in" disabled>+</button>
+            <button id="zoom-out" type="button" aria-label="Zoom out" title="Zoom out" disabled>−</button>
+          </div>
+          <button id="reset" type="button" disabled>Fit project</button>
+        </div>
+        <div class="legend" id="map-legend" aria-label="Map legend" hidden>
+          <div class="legend-row" id="tile2net-legend"></div>
+          <div class="legend-row" id="overlay-legend">
+            <span id="osm-legend" hidden><i class="osm-color"></i> OSM sidewalks &amp; crossings</span>
+            <span id="osm-street-legend" title="Streets with sidewalk tags" hidden><i class="osm-street-color"></i> OSM street centerlines</span>
+            <span id="selection-legend" hidden><i class="selection-color"></i> Selected</span>
+            <span id="reference-legend" hidden><i class="reference-color"></i> Reference</span>
+          </div>
+        </div>
+      </div>
+      <footer class="map-footer">
+        <span id="map-help">Drag to pan · Scroll to zoom</span>
+        <span id="osm-credit" hidden>© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a></span>
+      </footer>
+    </section>
+    <aside class="visualize-panel" id="visualize-panel" aria-label="Explore Tile2Net output">
+      <section class="card output-card" aria-labelledby="output-title">
+        <h2 id="output-title">Output by class</h2>
+        <div class="class-grid class-header" aria-hidden="true"><span>Class</span><span>Lines</span><span>Areas</span></div>
+        <div id="class-list" role="group" aria-label="Filter features by class"></div>
+      </section>
+      <section class="card features-card" aria-labelledby="features-title">
+        <div class="section-heading">
+          <h2 id="features-title">Features</h2>
+          <span class="feature-count" id="feature-count" aria-live="polite"></span>
+        </div>
+        <div class="feature-inspector" id="feature-inspector" hidden></div>
+        <div id="feature-list" class="feature-list"></div>
+        <button id="more-features" type="button" class="text-button" hidden>Show more features</button>
+      </section>
+    </aside>
+    <aside class="review-panel" id="review-panel" aria-label="OpenStreetMap review" hidden>
+      <section class="card queue-panel" aria-labelledby="queue-title">
+        <div class="panel-intro">
+          <h2 id="queue-title">Review queue</h2>
+          <p class="muted" id="queue-summary">Loading candidates…</p>
+          <label class="filter" for="filter">Show</label>
+          <select id="filter">
+            <option value="all">All candidates</option>
+            <option value="unreviewed">Unreviewed</option>
+            <option value="crosswalk">Crossings</option>
+            <option value="sidewalk">Sidewalks</option>
+            <option value="reviewed">Reviewed</option>
+          </select>
+        </div>
+        <div id="queue" class="queue"></div>
+        <div class="review-actions">
+          <span id="progress" class="muted" aria-live="polite"></span>
+          <button id="download" type="button" class="primary" disabled>Export review</button>
+        </div>
+      </section>
+      <section class="card details-panel" aria-labelledby="details-title">
+        <h2 id="details-title" tabindex="-1">Candidate details</h2>
+        <div id="details" class="details"></div>
+      </section>
+    </aside>
+  </main>
+  <script type="module" src="./viewer.mjs"></script>
+</body>
+</html>

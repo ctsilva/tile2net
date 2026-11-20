@@ -238,6 +238,13 @@ many predicted crosswalk lines connect to sidewalks at both ends. Pass
 `--reference-sidewalks` with a georeferenced line file to measure the share of
 traced sidewalk length within the specified tolerance of the predicted network.
 
+## Visualizing results on a map
+
+The [Tile2Net Visualizer](examples/autark-viewer/README.md) lets you browse and
+inspect output features over aerial imagery, OpenStreetMap and optional
+reference traces. Open **OSM review** to evaluate potential matches and export
+the selected geometry as GeoJSON.
+
 ## Running Interactively
 
 Tile2Net may also be run interactively in a Jupyter notebook by importing with `from tile2net import Raster`. To view
