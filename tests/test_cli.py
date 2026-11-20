@@ -54,7 +54,7 @@ def test_inference_help_imports_installed_ml_stack() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "--city_info" in result.stdout
-    assert "--device {cuda,cpu}" in result.stdout
+    assert "--device {cuda,cpu,mps}" in result.stdout
     assert "--active_tile_ids" not in result.stdout
     assert "--eval {test,folder}" in result.stdout
     assert "--vector-format {parquet,shapefile}" in result.stdout

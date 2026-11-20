@@ -28,8 +28,8 @@ commandline = compose_left(
         '--result_dir', type=str,
     ),
     arg(
-        '--device', choices=('cuda', 'cpu'), default='cuda',
-        help='Device for inference. Use cpu on systems without CUDA.',
+        '--device', choices=('cuda', 'cpu', 'mps'), default='cuda',
+        help='Device for inference. Use mps for Apple Metal or cpu for CPU inference.',
     ),
     arg(
         '--vector-format',

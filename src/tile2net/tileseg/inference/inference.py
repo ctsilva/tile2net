@@ -174,8 +174,13 @@ class Inference:
         args.world_size = 1
         if self.device.type == 'cuda':
             self._configure_cuda()
+        elif self.device.type == 'mps' and not torch.backends.mps.is_available():
+            raise RuntimeError(
+                'PyTorch cannot access an Apple Metal (MPS) device. '
+                'Use --device cpu to run on the CPU.'
+            )
         else:
-            logger.info('Using CPU for inference.')
+            logger.info('Using %s for inference.', self.device.type.upper())
 
         if args.dump_percent:
             if not os.path.exists(args.result_dir):
@@ -527,6 +532,8 @@ def inference(args: Namespace):
         torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
     result = runner.inference()
+    if runner.device.type == 'mps':
+        torch.mps.synchronize()
     elapsed = time.perf_counter() - started
     if using_cuda:
         allocated = torch.cuda.max_memory_allocated() / 2 ** 20
@@ -538,7 +545,7 @@ def inference(args: Namespace):
             f'peak_reserved_mib={reserved:.1f}'
         )
     else:
-        logger.info('CPU_METRICS elapsed_seconds=%.3f', elapsed)
+        logger.info('%s_METRICS elapsed_seconds=%.3f', runner.device.type.upper(), elapsed)
     return result
 
 

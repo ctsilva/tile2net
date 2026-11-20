@@ -18,6 +18,7 @@ from tile2net.raster.grid import Grid
 from tile2net.raster.pednet import PedNet
 from tile2net.tileseg.config import cfg
 from tile2net.tileseg.inference.inference import (
+    Inference,
     LocalDumper,
     build_pedestrian_network,
     read_segmentation_png,
@@ -27,6 +28,15 @@ from tile2net.tileseg.utils.misc import ThreadedDumper
 from tile2net.tileseg.utils.trnval_utils import eval_minibatch
 
 LOCATION = [40.7490, -74.0000, 40.7500, -73.9990]
+
+
+def test_mps_inference_reports_unavailable_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setitem(cfg.MODEL, "EVAL", "test")
+    args = SimpleNamespace(device="mps", model=SimpleNamespace(eval="test"), dump_percent=0)
+
+    with pytest.raises(RuntimeError, match="cannot access an Apple Metal"):
+        Inference(args)
 
 
 def test_cpu_minibatch_uses_data_parallel_checkpoint(

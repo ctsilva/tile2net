@@ -2,7 +2,7 @@
 
 To create the sidewalk networks for your area of interest, please ensure the following requirements are met:
 
-1. You have a CUDA-enabled GPU or pass `--device cpu` to the inference command.
+1. You have a CUDA-enabled GPU, or select `--device mps` for Apple Metal or `--device cpu` for CPU inference.
 2. You know the address or the latitude and longitude coordinates (EPSG 4326) of the bounding box of your region.
 3. You either have your own source of high-resolution orthorectified aerial imagery (zoom level 19 and above is
    preferred, and not less than 18), or your area of interest lies within the regions currently supported by Tile2Net so you can use Tile2Net
