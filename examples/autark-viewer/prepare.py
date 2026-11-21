@@ -9,11 +9,14 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from math import cos, hypot, radians
 from pathlib import Path
 
 import geopandas as gpd
 import requests
 from PIL import Image
+from pyproj import Transformer
+from shapely import STRtree
 from shapely.geometry import LineString, Point, box
 
 from tile2net.raster.grid import Grid
@@ -23,6 +26,10 @@ HERE = Path(__file__).resolve().parent
 OSM_API = 'https://api.openstreetmap.org/api/0.6/map'
 MATCH_DISTANCE = 3
 REVIEW_DISTANCE = 15
+CROSSING_TOLERANCE = 0.5
+CROP_EDGE_DISTANCE = 15
+SIDEWALK_MAX_GAP = 30
+SIDEWALK_HEADING_LIMIT = cos(radians(45))
 
 
 def project_layer(folder: Path, name: str) -> gpd.GeoDataFrame:
@@ -173,6 +180,127 @@ def collection(frame: gpd.GeoDataFrame) -> dict:
     return json.loads(frame.to_json(drop_id=True))
 
 
+def projected_lines(network: gpd.GeoDataFrame, metric) -> gpd.GeoDataFrame:
+    local = network.to_crs(metric)
+    return local[local.geom_type.eq('LineString') & local.length.gt(0)]
+
+
+def crossing_checks(network: gpd.GeoDataFrame, area, metric, tolerance: float) -> dict:
+    """Find crossing ends outside the sidewalk proximity tolerance."""
+    lines = projected_lines(network, metric)
+    crossings = lines[lines.f_type.eq('crosswalk')]
+    result = {'tolerance_m': tolerance, 'checked_endpoints': 0, 'flags': []}
+    if crossings.empty:
+        return result
+
+    sidewalks = lines[lines.f_type.eq('sidewalk')]
+    links = lines[lines.f_type.eq('sidewalk_connection')]
+    sidewalk_tree = STRtree(sidewalks.geometry)
+    attached_links = [
+        (index, line) for index, line in links.geometry.items()
+        if sidewalk_tree.query(line, predicate='dwithin', distance=tolerance).size
+    ]
+    paths = sorted([*sidewalks.geometry.items(), *attached_links], key=lambda item: item[0])
+    path_tree = STRtree([line for _, line in paths])
+    crossing_tree = STRtree(crossings.geometry)
+    to_wgs84 = Transformer.from_crs(metric, 4326, always_xy=True)
+    boundary = area.to_crs(metric).iloc[0].boundary
+
+    for position, (index, line) in enumerate(crossings.geometry.items()):
+        if line.is_closed:
+            continue
+        start, finish = Point(line.coords[0]), Point(line.coords[-1])
+        for end, point, opposite in (('start', start, finish), ('end', finish, start)):
+            neighbors = crossing_tree.query(point, predicate='dwithin', distance=tolerance)
+            if (neighbors != position).any():
+                continue
+            result['checked_endpoints'] += 1
+            nearest_paths, distances = path_tree.query_nearest(point, return_distance=True)
+            nearest = None
+            gap = None
+            if len(nearest_paths):
+                gap = float(distances[0])
+                if gap <= tolerance:
+                    continue
+                target_index, target_line = paths[min(nearest_paths)]
+                target = target_line.interpolate(target_line.project(point))
+                nearest = {
+                    'feature_index': int(target_index),
+                    'point': to_wgs84.transform(target.x, target.y),
+                    'near_opposite_end': target_line.distance(opposite) <= tolerance,
+                }
+            result['flags'].append({
+                'feature_index': int(index), 'end': end,
+                'point': to_wgs84.transform(point.x, point.y),
+                'gap_m': gap,
+                'nearest_path': nearest,
+                'near_crop_edge': boundary.distance(point) <= CROP_EDGE_DISTANCE,
+            })
+    return result
+
+
+def sidewalk_gaps(network: gpd.GeoDataFrame, area, metric, tolerance: float) -> dict:
+    """Pair open sidewalk endpoints that face one another across a short gap."""
+    lines = projected_lines(network, metric)
+    walkable = lines[lines.f_type.isin(('sidewalk', 'crosswalk', 'sidewalk_connection', 'medians'))]
+    line_tree = STRtree(walkable.geometry)
+    ends = []
+    for position, (index, row) in enumerate(walkable.iterrows()):
+        line = row.geometry
+        if row.f_type != 'sidewalk' or line.is_closed:
+            continue
+        sample = min(4, line.length / 2)
+        for point, inside in (
+            (Point(line.coords[0]), line.interpolate(sample)),
+            (Point(line.coords[-1]), line.interpolate(line.length - sample)),
+        ):
+            touching = line_tree.query(point, predicate='dwithin', distance=tolerance)
+            if (touching != position).any():
+                continue
+            dx, dy = point.x - inside.x, point.y - inside.y
+            magnitude = hypot(dx, dy)
+            if magnitude:
+                ends.append((int(index), point, (dx / magnitude, dy / magnitude)))
+
+    endpoint_tree = STRtree([point for _, point, _ in ends])
+    candidates = []
+    for i, (index, point, direction) in enumerate(ends):
+        for j in endpoint_tree.query(point, predicate='dwithin', distance=SIDEWALK_MAX_GAP):
+            other_index, other_point, other_direction = ends[j]
+            if j <= i or other_index == index:
+                continue
+            distance = point.distance(other_point)
+            if distance <= tolerance:
+                continue
+            ux, uy = (other_point.x - point.x) / distance, (other_point.y - point.y) / distance
+            faces_gap = ux * direction[0] + uy * direction[1] >= SIDEWALK_HEADING_LIMIT
+            other_faces_gap = -ux * other_direction[0] - uy * other_direction[1] >= SIDEWALK_HEADING_LIMIT
+            if faces_gap and other_faces_gap:
+                candidates.append((distance, i, j))
+
+    boundary = area.to_crs(metric).iloc[0].boundary
+    to_wgs84 = Transformer.from_crs(metric, 4326, always_xy=True)
+    paired = set()
+    gaps = []
+    for distance, i, j in sorted(candidates):
+        if i in paired or j in paired:
+            continue
+        index, point, _ = ends[i]
+        other_index, other_point, _ = ends[j]
+        paired.update((i, j))
+        gaps.append({
+            'feature_index': index,
+            'point': to_wgs84.transform(point.x, point.y),
+            'gap_m': distance,
+            'nearest_path': {
+                'feature_index': other_index,
+                'point': to_wgs84.transform(other_point.x, other_point.y),
+            },
+            'near_crop_edge': boundary.distance(LineString((point, other_point))) <= CROP_EDGE_DISTANCE,
+        })
+    return {'max_gap_m': SIDEWALK_MAX_GAP, 'open_endpoints': len(ends), 'flags': gaps}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('city_info', type=Path)
@@ -184,8 +312,12 @@ def main() -> None:
     parser.add_argument('--reference', type=Path, help='Optional georeferenced review geometry.')
     parser.add_argument('--title', help='Name displayed in the viewer.')
     parser.add_argument('--imagery-label', default='Tile2Net input imagery')
+    parser.add_argument('--crossing-tolerance', type=float, default=CROSSING_TOLERANCE,
+                        help='Crossing endpoint proximity tolerance in meters (default: 0.5).')
     args = parser.parse_args()
 
+    if not 0 < args.crossing_tolerance < float('inf'):
+        parser.error('--crossing-tolerance must be a finite positive distance.')
     dist = args.autark.expanduser().resolve() / 'autk-map' / 'dist'
     if not (dist / 'autk-map.js').is_file():
         parser.error('Build autk-map in the Autark checkout and pass that checkout to --autark.')
@@ -217,11 +349,14 @@ def main() -> None:
         ('network', network), ('polygons', polygons), ('osm', osm), ('reference', reference),
     )}
     key = hashlib.sha256(json.dumps(layers, sort_keys=True).encode()).hexdigest()[:16]
+    checks = crossing_checks(network, area, metric, args.crossing_tolerance)
+    checks['sidewalk_gaps'] = sidewalk_gaps(network, area, metric, args.crossing_tolerance)
     data = {
         'key': key, 'title': args.title or info['name'], 'bbox': area.total_bounds.tolist(),
         'imagery': {'label': args.imagery_label, 'zoom': info['zoom'], 'tile_size': info.get('base_tilesize', 256)},
         'osm_available': bool(snapshot), 'layers': layers,
         'candidates': candidates(network, osm, metric, bool(snapshot)),
+        'network_checks': checks,
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

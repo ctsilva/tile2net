@@ -4,6 +4,8 @@ const byId = (id) => document.getElementById(id);
 const controls = new Map(
     [...document.querySelectorAll('[data-layer]')].map((input) => [input.dataset.layer, input]),
 );
+const workspaceModes = ['visualize', 'review', 'checks'];
+const gapPreviewDistance = 15;
 const reviewLabels = {
     retain_osm: 'Retain OSM',
     include_prediction: 'Include prediction',
@@ -41,6 +43,7 @@ const colors = {
     reference: { r: 232, g: 168, b: 255, alpha: 1 },
     selected: { r: 102, g: 227, b: 255, alpha: 1 },
     atlasSelection: { r: 17, g: 113, b: 152, alpha: 1 },
+    check: { r: 164, g: 80, b: 20, alpha: 1 },
 };
 const geometryLayers = {
     Point: 'points', MultiPoint: 'points', LineString: 'polylines', MultiLineString: 'polylines',
@@ -84,10 +87,10 @@ function projectFeature(feature) {
     return { ...feature, geometry: { type, coordinates: projectCoordinates(coordinates) } };
 }
 
-function dashLine(coordinates) {
+function dashLine(coordinates, ink = 7, gap = 4) {
     const dashes = [];
     let drawing = true;
-    let remaining = 7;
+    let remaining = ink;
     let dash = [coordinates[0]];
     for (let i = 1; i < coordinates.length; i += 1) {
         const [x, y] = coordinates[i - 1];
@@ -105,7 +108,7 @@ function dashLine(coordinates) {
             }
             drawing = !drawing;
             dash = drawing ? [cut] : [];
-            remaining = drawing ? 7 : 4;
+            remaining = drawing ? ink : gap;
         }
         remaining -= length - offset;
         if (drawing && length > offset) dash.push(endpoint);
@@ -118,7 +121,24 @@ function projectOsmStreet(feature) {
     const projected = projectFeature(feature);
     const { type, coordinates } = projected.geometry;
     const lines = type === 'LineString' ? [coordinates] : coordinates;
-    return { ...projected, geometry: { type: 'MultiLineString', coordinates: lines.flatMap(dashLine) } };
+    return { ...projected, geometry: { type: 'MultiLineString', coordinates: lines.flatMap((line) => dashLine(line)) } };
+}
+
+function mapFeature(type, coordinates) {
+    return { type: 'Feature', properties: {}, geometry: { type, coordinates } };
+}
+
+function gapFeature(flag) {
+    if (!flag.nearest_path || (!flag.sidewalkGap && flag.gap_m > gapPreviewDistance)) return null;
+    return mapFeature('LineString', [flag.point, flag.nearest_path.point]);
+}
+
+function projectGap(feature) {
+    const points = projectFeature(feature).geometry.coordinates;
+    const [[x1, y1], [x2, y2]] = points;
+    const length = Math.hypot(x2 - x1, y2 - y1);
+    return length ? mapFeature('MultiLineString', dashLine(points, length / 5, length / 10))
+        : mapFeature('LineString', points);
 }
 
 function selectionBounds(feature) {
@@ -159,6 +179,12 @@ function downloadJson(data) {
 
 async function start(project) {
     const { layers, candidates, imagery, bbox } = project;
+    const checks = project.network_checks;
+    const crossingFlags = checks?.flags ?? [];
+    const sidewalkFlags = (checks?.sidewalk_gaps?.flags ?? []).map((flag) => ({ ...flag, sidewalkGap: true }));
+    const flags = [...crossingFlags, ...sidewalkFlags];
+    const checkRows = [];
+    let activeCheck = 0;
     const osm = new Map(layers.osm.features.map((feature) => [feature.properties.osm_id, feature]));
     const osmStreets = layers.osm.features.filter((feature) => feature.properties.kind === 'street tags');
     const osmFootpaths = layers.osm.features.filter((feature) => feature.properties.kind !== 'street tags');
@@ -178,7 +204,7 @@ async function start(project) {
     let inspected;
     let mode = 'visualize';
     let atlas = false;
-    const osmVisibility = { visualize: false, review: true };
+    const osmVisibility = { visualize: false, review: true, checks: false };
     const storageKey = `tile2net-review:${project.key}`;
     const decisions = new Map();
     try {
@@ -208,12 +234,11 @@ async function start(project) {
         const osmToggle = controls.get('osm');
         osmVisibility[mode] = osmToggle.checked;
         mode = next;
-        const reviewing = mode === 'review';
-        byId('workspace').classList.toggle('is-review', reviewing);
-        byId('visualize-panel').hidden = reviewing;
-        byId('review-panel').hidden = !reviewing;
-        byId('visualize-mode').setAttribute('aria-pressed', String(!reviewing));
-        byId('review-mode').setAttribute('aria-pressed', String(reviewing));
+        byId('workspace').classList.toggle('is-review', mode === 'review');
+        for (const name of workspaceModes) {
+            byId(`${name}-panel`).hidden = name !== mode;
+            byId(`${name}-mode`).setAttribute('aria-pressed', String(name === mode));
+        }
         osmToggle.checked = !osmToggle.disabled && osmVisibility[mode];
         osmToggle.dispatchEvent(new Event('change'));
         // Autark updates the WebGPU viewport on a window resize.
@@ -222,6 +247,94 @@ async function start(project) {
 
     function featureName(record) {
         return `${names.get(record.kind)} ${record.index + 1}`;
+    }
+
+    function zoomToCheck(flag) {
+        if (!map) return;
+        const detail = gapFeature(flag) ?? mapFeature('Point', flag.point);
+        map.fitBounds(selectionBounds(projectFeature(detail)));
+    }
+
+    function renderCheckDetails() {
+        const container = byId('check-details');
+        const flag = flags[activeCheck];
+        if (!flag) return;
+        const feature = output.get('network')[flag.feature_index];
+        const nearest = output.get('network')[flag.nearest_path?.feature_index];
+        const heading = element('h3', flag.sidewalkGap ? 'Possible sidewalk gap' : featureName(feature));
+        const distance = nearest ? `${flag.gap_m.toFixed(2)} m to ${featureName(nearest)}`
+            : 'No sidewalk or attached connector in this run.';
+        const endpoint = flag.end === 'start' ? 'Start endpoint' : 'End endpoint';
+        const actions = element('div', '', 'feature-actions');
+        const zoom = action(flag.sidewalkGap ? 'Zoom to gap' : 'Zoom to endpoint', () => zoomToCheck(flag));
+        zoom.disabled = !map;
+        actions.append(zoom);
+        const candidate = byFeature.get(flag.feature_index);
+        if (candidate && project.osm_available) {
+            actions.append(action('Review OSM match', () => {
+                setMode('review');
+                selectCandidate(candidate);
+                byId('details-title').focus();
+            }));
+        }
+        const measurement = flag.sidewalkGap ? `${flag.gap_m.toFixed(2)} m between ${featureName(feature)} and ${featureName(nearest)}.`
+            : `${endpoint} · ${distance}`;
+        container.replaceChildren(heading, element('p', measurement, 'muted'));
+        if (flag.nearest_path?.near_opposite_end) {
+            container.append(element('p', 'The other end is already within tolerance of this path.', 'muted'));
+        }
+        if (flag.near_crop_edge) container.append(element('p', 'This endpoint is within 15 m of the project boundary.', 'muted'));
+        container.append(actions);
+    }
+
+    function selectCheck(index) {
+        checkRows[activeCheck].setAttribute('aria-current', 'false');
+        activeCheck = index;
+        checkRows[index].setAttribute('aria-current', 'true');
+        renderCheckDetails();
+        zoomToCheck(flags[index]);
+        highlightSelection();
+    }
+
+    function renderChecks() {
+        const summary = byId('checks-summary');
+        const sidewalkSummary = byId('sidewalk-check-summary');
+        if (!checks) {
+            summary.textContent = 'Prepare this project with the current viewer to add network checks.';
+            sidewalkSummary.textContent = 'Sidewalk gap results are unavailable for this package.';
+            return;
+        }
+        if (!checks.checked_endpoints) {
+            summary.textContent = 'No crossing endpoints to check in this run.';
+        } else {
+            const count = crossingFlags.length === 1 ? '1 flagged endpoint' : `${crossingFlags.length.toLocaleString()} flagged endpoints`;
+            summary.textContent = `${count} · ${checks.checked_endpoints.toLocaleString()} checked · ${checks.tolerance_m} m tolerance`;
+            if (!crossingFlags.length) {
+                summary.append(element('br'), 'All checked endpoints are within tolerance of a sidewalk or attached connector.');
+            }
+        }
+        if (checks.sidewalk_gaps) {
+            const count = sidewalkFlags.length === 1 ? '1 possible gap' : `${sidewalkFlags.length.toLocaleString()} possible gaps`;
+            sidewalkSummary.textContent = `${count} · Facing sidewalk ends up to ${checks.sidewalk_gaps.max_gap_m} m apart`;
+        } else {
+            sidewalkSummary.textContent = 'Prepare this project again to add sidewalk gap checks.';
+        }
+        if (!flags.length) return;
+        byId('check-results').hidden = false;
+        const list = byId('check-list');
+        flags.forEach((flag, index) => {
+            const feature = output.get('network')[flag.feature_index];
+            const endpoint = flag.end === 'start' ? 'Start' : 'End';
+            const gap = flag.gap_m === null ? 'No path' : `${flag.gap_m.toFixed(2)} m gap`;
+            const row = action('', () => selectCheck(index), 'feature-row');
+            row.setAttribute('aria-current', String(index === activeCheck));
+            const name = flag.sidewalkGap ? `Sidewalks ${flag.feature_index + 1} & ${flag.nearest_path.feature_index + 1}`
+                : `${featureName(feature)} · ${endpoint}`;
+            row.append(element('span', name), element('span', gap, 'feature-meta'));
+            checkRows.push(row);
+            list.append(row);
+        });
+        renderCheckDetails();
     }
 
     function zoomToFeature(record) {
@@ -536,6 +649,7 @@ async function start(project) {
         byId('osm-street-legend').hidden = !osmVisible || !osmStreets.length;
         byId('reference-legend').hidden = !controls.get('reference').checked || !layers.reference.features.length;
         byId('selection-legend').hidden = !selected;
+        byId('check-legend').hidden = mode !== 'checks' || !flags.length;
         byId('osm-credit').hidden = !project.osm_available || !controls.get('osm').checked;
         const overlayLegend = byId('overlay-legend');
         overlayLegend.hidden = [...overlayLegend.children].every((item) => item.hidden);
@@ -547,11 +661,15 @@ async function start(project) {
         if (!map) return;
         overlays.forEach((id) => map.removeLayer(id));
         overlays = [];
-        const record = mode === 'review' ? output.get('network')[current?.feature_index] : inspected;
+        const flag = mode === 'checks' ? flags[activeCheck] : null;
+        const selectedIndex = mode === 'review' ? current?.feature_index : flag?.feature_index;
+        const record = mode === 'visualize' ? inspected : output.get('network')[selectedIndex];
         const selected = record && controls.get(record.group).checked;
         if (selected) {
             const color = atlas ? colors.atlasSelection : colors.selected;
-            overlays.push(...vectorLayers('selected-prediction', [record.feature], {
+            const features = [record.feature];
+            if (flag?.sidewalkGap) features.push(output.get('network')[flag.nearest_path.feature_index].feature);
+            overlays.push(...vectorLayers('selected-prediction', features, {
                 color, strokeColor: color, polylinesWidth: 1.65,
                 opacity: record.group === 'polygons' ? 0.6 : 1,
             }));
@@ -562,12 +680,26 @@ async function start(project) {
                 polylinesWidth: 2.4, pointSize: 2.1, street: feature.properties.kind === 'street tags',
             }));
         }
+        if (flag) {
+            const gap = gapFeature(flag);
+            if (gap) {
+                overlays.push(...vectorLayers('check-gap', [gap], {
+                    color: colors.check, polylinesWidth: 1.3,
+                }, undefined, projectGap));
+                if (!flag.sidewalkGap) {
+                    overlays.push(...vectorLayers('check-target', [mapFeature('Point', flag.nearest_path.point)], {
+                        color: colors.check, pointSize: 0.55,
+                    }));
+                }
+            }
+        }
         renderLegend(selected);
         map.requestRender();
     }
 
-    byId('visualize-mode').addEventListener('click', () => setMode('visualize'));
-    byId('review-mode').addEventListener('click', () => setMode('review'));
+    for (const name of workspaceModes) {
+        byId(`${name}-mode`).addEventListener('click', () => setMode(name));
+    }
     byId('more-features').addEventListener('click', () => {
         browseLimit += 60;
         renderFeatureList();
@@ -584,6 +716,7 @@ async function start(project) {
         layerMenu.querySelector('summary').focus();
     });
     renderClassList();
+    renderChecks();
     if (current) {
         selectCandidate(current);
     } else {
@@ -651,6 +784,15 @@ async function start(project) {
             isColorMap: true, polylinesWidth: 1.05,
         }, featureColorMap));
         atlasGroups.set('network', atlasLayers('network'));
+        const markerFlags = flags.flatMap((flag, index) => {
+            const points = flag.sidewalkGap ? [flag.point, flag.nearest_path.point] : [flag.point];
+            return points.map((point) => ({ point, index }));
+        });
+        const markers = markerFlags.map(({ point }) => mapFeature('Point', point));
+        const checkLayers = [
+            ...vectorLayers('check-marker-outline', markers, { color: colors.osmOutline, pointSize: 2.7, isSkip: true }),
+            ...vectorLayers('check-marker', markers, { color: colors.check, pointSize: 2, isSkip: true }),
+        ];
 
         function syncLayerAppearance(group) {
             const visible = controls.get(group).checked;
@@ -670,14 +812,21 @@ async function start(project) {
 
         const networkLayer = 'network-polylines';
         const polygonLayer = 'polygons-polygons';
+        const checkLayer = 'check-marker-points';
         function syncPicking() {
-            const pickLines = groups.get('network').includes(networkLayer) && controls.get('network').checked;
+            const checking = mode === 'checks';
+            const pickLines = !checking && groups.get('network').includes(networkLayer) && controls.get('network').checked;
             const showAreas = groups.get('polygons').includes(polygonLayer) && controls.get('polygons').checked;
             const pickAreas = mode === 'visualize' && showAreas && !pickLines;
             map.updateRenderInfo(networkLayer, { isPick: pickLines });
             map.updateRenderInfo(polygonLayer, { isPick: pickAreas });
+            for (const id of checkLayers) map.updateRenderInfo(id, { isSkip: !checking });
+            map.updateRenderInfo(checkLayer, { isPick: checking });
             opacity.disabled = !showAreas;
-            const pickHelp = pickLines ? ' · Double-click a line to inspect' : pickAreas ? ' · Double-click an area to inspect' : '';
+            let pickHelp = '';
+            if (checking && flags.length) pickHelp = ' · Double-click a flag to inspect';
+            else if (pickLines) pickHelp = ' · Double-click a line to inspect';
+            else if (pickAreas) pickHelp = ' · Double-click an area to inspect';
             byId('map-help').textContent = 'Drag to pan · Scroll to zoom' + pickHelp;
         }
 
@@ -705,7 +854,17 @@ async function start(project) {
             highlightSelection();
         });
         map.events.on(MapEvent.PICKING, ({ layerId, selection }) => {
-            const index = sourceIndices.get(layerId)?.[selection.at(-1)];
+            const picked = selection.at(-1);
+            if (mode === 'checks') {
+                if (layerId === checkLayer && markerFlags[picked]) {
+                    const index = markerFlags[picked].index;
+                    map.setHighlightedIds(layerId, []);
+                    selectCheck(index);
+                    checkRows[index].scrollIntoView({ block: 'nearest' });
+                }
+                return;
+            }
+            const index = sourceIndices.get(layerId)?.[picked];
             if (index === undefined) return;
             map.setHighlightedIds(layerId, []);
             if (mode === 'visualize') {
@@ -736,6 +895,7 @@ async function start(project) {
         map.draw();
         renderInspector();
         renderDetails();
+        renderCheckDetails();
         basemap.disabled = false;
         mapStyle.disabled = false;
         byId('map-status').hidden = true;

@@ -13,6 +13,7 @@
   --osm-outline: #fff9ef;
   --selected: #66e3ff;
   --reference: #e8a8ff;
+  --check: #a45014;
 }
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; }
@@ -64,6 +65,8 @@ select {
 .project-name { display: block; color: var(--muted); font-size: .84rem; margin-top: 4px; overflow-wrap: anywhere; }
 .mode-switch {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 3px;
   padding: 3px;
   background: var(--panel);
@@ -172,6 +175,7 @@ select {
 }
 .selection-color { background: var(--selected); }
 .reference-color { background: var(--reference); }
+.legend .check-color { width: 7px; height: 7px; border-radius: 50%; background: var(--check); outline: 1px solid var(--osm-outline); }
 .map-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 3px 12px; min-height: 36px; padding: 9px 13px; font-size: .78rem; color: var(--muted); }
 
 .visualize-panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -195,6 +199,9 @@ select {
 .feature-inspector { margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel); }
 .feature-inspector p { margin: 4px 0 8px; }
 .feature-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.checks-summary { margin-top: 6px; line-height: 1.5; }
+#check-results { flex: 0 1 auto; }
+#check-details p { line-height: 1.4; }
 .text-button { align-self: flex-start; margin-top: 8px; }
 
 .review-panel { display: grid; grid-template-columns: minmax(168px, .78fr) minmax(215px, 1.22fr); gap: 11px; min-height: 0; }

@@ -17,6 +17,7 @@
     <div class="mode-switch" role="group" aria-label="Workspace">
       <button id="visualize-mode" type="button" aria-pressed="true" aria-controls="visualize-panel">Visualize</button>
       <button id="review-mode" type="button" aria-pressed="false" aria-controls="review-panel">OSM review</button>
+      <button id="checks-mode" type="button" aria-pressed="false" aria-controls="checks-panel">Network checks</button>
     </div>
   </header>
   <main class="workbench" id="workspace">
@@ -71,6 +72,7 @@
             <span id="osm-street-legend" title="Streets with sidewalk tags" hidden><i class="osm-street-color"></i> OSM street centerlines</span>
             <span id="selection-legend" hidden><i class="selection-color"></i> Selected</span>
             <span id="reference-legend" hidden><i class="reference-color"></i> Reference</span>
+            <span id="check-legend" hidden><i class="check-color"></i> Network gap</span>
           </div>
         </div>
       </div>
@@ -93,6 +95,21 @@
         <div class="feature-inspector" id="feature-inspector" hidden></div>
         <div id="feature-list" class="feature-list"></div>
         <button id="more-features" type="button" class="text-button" hidden>Show more features</button>
+      </section>
+    </aside>
+    <aside class="visualize-panel" id="checks-panel" aria-label="Network checks" hidden>
+      <section class="card output-card" aria-labelledby="checks-title">
+        <h2 id="checks-title">Crossing endpoints</h2>
+        <p class="muted checks-summary" id="checks-summary"></p>
+      </section>
+      <section class="card output-card" aria-labelledby="sidewalk-check-title">
+        <h2 id="sidewalk-check-title">Sidewalk gaps</h2>
+        <p class="muted checks-summary" id="sidewalk-check-summary"></p>
+      </section>
+      <section class="card features-card" id="check-results" aria-labelledby="check-results-title" hidden>
+        <h2 id="check-results-title">Flagged locations</h2>
+        <div class="feature-inspector" id="check-details"></div>
+        <div id="check-list" class="feature-list"></div>
       </section>
     </aside>
     <aside class="review-panel" id="review-panel" aria-label="OpenStreetMap review" hidden>
